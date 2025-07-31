@@ -19,7 +19,7 @@ def load_dependencies():
         # Menggunakan 'punkt' yang benar, bukan 'punkt_tab'
         nltk.data.find('tokenizers/punkt')
     except LookupError:
-        nltk.download('punkt')
+        nltk.download('punkt_tab')
 
     try:
         nlp = spacy.load('en_core_web_sm')
