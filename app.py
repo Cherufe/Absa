@@ -1,4 +1,4 @@
-# app.py
+# app.py (Versi Final - Siap Deploy)
 import streamlit as st
 import pickle
 import re
@@ -20,7 +20,7 @@ def load_dependencies():
         nltk.data.find('tokenizers/punkt')
     except LookupError:
         nltk.download('punkt')
-    
+
     try:
         nlp = spacy.load('en_core_web_sm')
     except OSError:
@@ -56,7 +56,7 @@ def preprocess_text(text):
     text = re.sub(r'[^a-zA-Z\s]', '', text)
     text = text.lower()
     tokens = word_tokenize(text)
-    
+
     processed_tokens = []
     doc = nlp(" ".join(tokens))
     for token in doc:
@@ -96,11 +96,11 @@ user_input = st.text_area("Tulis atau salin ulasan di sini:", value=st.session_s
 
 if st.button("Prediksi Sentimen", key="predict_button"):
     if all([vectorizer, sentiment_model]) and user_input:
-        
+
         # 1. Pra-pemrosesan teks
         with st.spinner("Menganalisis teks..."):
             processed_text_str = preprocess_text(user_input)
-        
+
         # Tampilkan teks yang sudah diproses
         with st.expander("Lihat Teks yang Sudah Diproses"):
             st.info("Ini adalah teks yang dianalisis oleh model setelah dibersihkan (dihapus stopwords, simbol, dll.)")
@@ -110,10 +110,10 @@ if st.button("Prediksi Sentimen", key="predict_button"):
         vectorized_input = vectorizer.transform([processed_text_str])
         prediction = sentiment_model.predict(vectorized_input)
         prediction_proba = sentiment_model.predict_proba(vectorized_input)
-        
+
         # 3. Tampilkan hasil
         st.subheader("Hasil Analisis:")
-        
+
         if prediction[0] == 1:
             st.metric(label="Prediksi Sentimen", value="Positif 👍")
             st.success(f"Skor Kepercayaan: {prediction_proba[0][1]:.2%}")
@@ -121,6 +121,6 @@ if st.button("Prediksi Sentimen", key="predict_button"):
         else:
             st.metric(label="Prediksi Sentimen", value="Negatif 👎")
             st.error(f"Skor Kepercayaan: {prediction_proba[0][0]:.2%}")
-            
+
     else:
         st.warning("Model tidak berhasil dimuat atau tidak ada input teks.")
