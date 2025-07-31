@@ -16,6 +16,7 @@ def load_dependencies():
     except LookupError:
         nltk.download('stopwords')
     try:
+        # Menggunakan 'punkt' yang benar, bukan 'punkt_tab'
         nltk.data.find('tokenizers/punkt')
     except LookupError:
         nltk.download('punkt')
