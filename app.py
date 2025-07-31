@@ -1,118 +1,125 @@
 # app.py
-
 import streamlit as st
-import pandas as pd
 import pickle
-import matplotlib.pyplot as plt
+import re
+import nltk
+import spacy
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
 
-# --- Konfigurasi Halaman ---
-st.set_page_config(page_title="Eksplorasi Review Ponsel", layout="wide")
-
-# --- Fungsi untuk Memuat Data (Menggunakan Cache untuk Performa) ---
-@st.cache_data
-def load_data():
-    """
-    Fungsi ini memuat data review yang sudah dianalisis dari file PKL.
-    """
-    file_path = "analyzed_reviews.pkl"
+# --- Download data NLTK dan muat model spaCy ---
+@st.cache_resource
+def load_dependencies():
+    """Memuat semua dependensi yang dibutuhkan sekali saja."""
     try:
-        data = pd.read_pickle(file_path)
-        # Mengubah kolom Brand Name menjadi string
-        data['Brand Name'] = data['Brand Name'].astype(str)
-        return data
-    except FileNotFoundError:
-        st.error(f"File '{file_path}' tidak ditemukan. Pastikan Anda telah menjalankan notebook analisis dan meletakkan file output di folder yang sama dengan app.py.")
-        return None
-    except Exception as e:
-        st.error(f"Terjadi error saat memuat data: {e}")
-        return None
+        stopwords.words('english')
+    except LookupError:
+        nltk.download('stopwords')
+    try:
+        nltk.data.find('tokenizers/punkt')
+    except LookupError:
+        nltk.download('punkt')
+    
+    try:
+        nlp = spacy.load('en_core_web_sm')
+    except OSError:
+        st.info("Model spaCy tidak ditemukan, sedang mengunduh...")
+        from spacy.cli import download
+        download('en_core_web_sm')
+        nlp = spacy.load('en_core_web_sm')
+        st.success("Model spaCy berhasil diunduh.")
+    return nlp
+
+nlp = load_dependencies()
+stop_words = set(stopwords.words('english'))
+
+# --- Fungsi untuk Memuat Model ---
+@st.cache_resource
+def load_models():
+    """Memuat model yang diperlukan untuk prediksi sentimen."""
+    try:
+        with open('vectorizer.pkl', 'rb') as f:
+            vectorizer = pickle.load(f)
+        with open('model.pkl', 'rb') as f:
+            sentiment_model = pickle.load(f)
+        return vectorizer, sentiment_model
+    except FileNotFoundError as e:
+        st.error(f"Error memuat model: {e}. Pastikan file 'vectorizer.pkl' dan 'model.pkl' ada di folder yang sama.")
+        return None, None
+
+# --- Fungsi Pra-pemrosesan Teks (Sesuai Colab) ---
+def preprocess_text(text):
+    """Membersihkan teks input agar sesuai dengan format data training."""
+    text = re.sub(r'http\S+|www\S+|https\S+', '', text, flags=re.MULTILINE)
+    text = re.sub(r'\@\w+|\#', '', text)
+    text = re.sub(r'[^a-zA-Z\s]', '', text)
+    text = text.lower()
+    tokens = word_tokenize(text)
+    
+    processed_tokens = []
+    doc = nlp(" ".join(tokens))
+    for token in doc:
+        if token.text not in stop_words and token.pos_ in ['NOUN', 'ADJ', 'VERB', 'ADV']:
+            processed_tokens.append(token.lemma_)
+    return " ".join(processed_tokens)
+
+# --- Konfigurasi Halaman & Memuat Model ---
+st.set_page_config(page_title="Prediksi Sentimen Review", layout="centered")
+vectorizer, sentiment_model = load_models()
 
 # --- Antarmuka Aplikasi ---
+st.title("🤖 Prediksi Sentimen Review")
+st.write("Masukkan ulasan ponsel (dalam Bahasa Inggris) untuk memprediksi sentimennya.")
+st.write("---")
 
-# Judul Utama
-st.title("📊 Dasbor Analisis Review Ponsel")
-st.write("Analisis sentimen dan aspek yang paling sering dibicarakan untuk berbagai merek ponsel.")
+# --- Fitur Contoh Input ---
+st.write("**Tidak punya teks untuk dicoba? Klik contoh di bawah ini:**")
+col1, col2 = st.columns(2)
+positive_example = "I absolutely love this phone! The camera quality is stunning and the battery lasts all day with heavy use. Highly recommended!"
+negative_example = "This was a terrible purchase. The phone started lagging after just a week and the battery life is disappointing. I regret buying it."
 
-# Memuat data
-df = load_data()
+# Menggunakan session state untuk menangani pembaruan teks area
+if 'user_input' not in st.session_state:
+    st.session_state.user_input = ""
 
-# Hanya lanjutkan jika data berhasil dimuat
-if df is not None:
-    # --- Input Pengguna: Kotak Pencarian Teks untuk Merek ---
-    search_query = st.text_input(
-        "Ketik merek HP yang ingin Anda cari:",
-        placeholder="Contoh: Samsung, Apple, Xiaomi..."
-    )
+if col1.button("Coba Contoh Positif"):
+    st.session_state.user_input = positive_example
+    st.rerun()
 
-    st.write("---")
+if col2.button("Coba Contoh Negatif"):
+    st.session_state.user_input = negative_example
+    st.rerun()
 
-    # --- Tampilkan Hasil Setelah Pengguna Mencari ---
-    if search_query:
-        # Filter dataframe berdasarkan input pencarian (case-insensitive)
-        brand_df = df[df['Brand Name'].str.contains(search_query, case=False, na=False)]
+user_input = st.text_area("Tulis atau salin ulasan di sini:", value=st.session_state.user_input, height=150, key="main_text_area")
 
-        if not brand_df.empty:
-            # Dapatkan nama merek unik dari hasil filter untuk ditampilkan di judul
-            brand_name_found = brand_df['Brand Name'].unique()[0]
-            st.header(f"Hasil Analisis untuk: {brand_name_found}")
 
-            # --- Tampilkan Metrik dan Diagram Pai dalam dua kolom ---
-            col1, col2 = st.columns([1, 1]) # Beri rasio agar seimbang
+if st.button("Prediksi Sentimen", key="predict_button"):
+    if all([vectorizer, sentiment_model]) and user_input:
+        
+        # 1. Pra-pemrosesan teks
+        with st.spinner("Menganalisis teks..."):
+            processed_text_str = preprocess_text(user_input)
+        
+        # Tampilkan teks yang sudah diproses
+        with st.expander("Lihat Teks yang Sudah Diproses"):
+            st.info("Ini adalah teks yang dianalisis oleh model setelah dibersihkan (dihapus stopwords, simbol, dll.)")
+            st.write(f"> *{processed_text_str}*")
 
-            # --- KOLOM 1: Metrik Angka & Daftar Aspek ---
-            with col1:
-                st.subheader(f"Ringkasan Sentimen")
-                sentiment_counts = brand_df['Sentiment_Label'].value_counts()
-                positive_count = sentiment_counts.get('Positif', 0)
-                negative_count = sentiment_counts.get('Negatif', 0)
-
-                st.metric(label="👍 Jumlah Review Positif", value=int(positive_count))
-                st.metric(label="👎 Jumlah Review Negatif", value=int(negative_count))
-                
-                # Filter untuk mendapatkan review yang memiliki aspek
-                reviews_with_aspects = brand_df.dropna(subset=['Aspect'])
-
-                if not reviews_with_aspects.empty:
-                    st.subheader("Aspek yang Paling Sering Dibahas")
-                    aspect_list = reviews_with_aspects['Aspect'].unique()
-                    st.markdown(f"<div style='display: flex; flex-wrap: wrap; gap: 8px;'>{''.join([f'<span style=\"background-color: #e0e0e0; border-radius: 16px; padding: 4px 12px;\">{aspect}</span>' for aspect in aspect_list])}</div>", unsafe_allow_html=True)
-                
-            # --- KOLOM 2: DIAGRAM PAI untuk Distribusi Sentimen ---
-            with col2:
-                st.subheader("Distribusi Sentimen Keseluruhan")
-                if positive_count > 0 or negative_count > 0:
-                    labels = 'Positif', 'Negatif'
-                    sizes = [positive_count, negative_count]
-                    colors = ['#33FF7A', '#FF4B4B'] # Hijau untuk Positif, Merah untuk Negatif
-                    
-                    fig1, ax1 = plt.subplots()
-                    ax1.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%', startangle=90,
-                            wedgeprops={"edgecolor":"white",'linewidth': 1, 'antialiased': True})
-                    ax1.axis('equal')  # Memastikan diagram pai berbentuk lingkaran.
-
-                    st.pyplot(fig1)
-                else:
-                    st.info("Tidak ada data sentimen untuk ditampilkan dalam diagram.")
-            
-            st.write("---")
-            
-            # --- Tampilkan Daftar Komentar di bawah ---
-            reviews_with_aspects = brand_df.dropna(subset=['Aspect'])
-            if not reviews_with_aspects.empty:
-                st.subheader(f"Detail Komentar (Ditemukan {len(reviews_with_aspects)} ulasan dengan aspek)")
-                for index, row in reviews_with_aspects.iterrows():
-                    sentiment_icon = "👍" if row['Sentiment_Label'] == 'Positif' else "👎"
-                    with st.expander(f"{sentiment_icon} **Sentimen:** {row['Sentiment_Label']} | **Aspek:** {row.get('Aspect', 'N/A')}"):
-                        st.write(f"**Komentar Lengkap:**")
-                        st.markdown(f"> *{row['Reviews']}*")
-            else:
-                 st.info(f"Tidak ada review dengan aspek spesifik yang terdeteksi untuk merek yang mengandung kata '{search_query}'.")
-
+        # 2. Prediksi Sentimen
+        vectorized_input = vectorizer.transform([processed_text_str])
+        prediction = sentiment_model.predict(vectorized_input)
+        prediction_proba = sentiment_model.predict_proba(vectorized_input)
+        
+        # 3. Tampilkan hasil
+        st.subheader("Hasil Analisis:")
+        
+        if prediction[0] == 1:
+            st.metric(label="Prediksi Sentimen", value="Positif 👍")
+            st.success(f"Skor Kepercayaan: {prediction_proba[0][1]:.2%}")
+            st.balloons()
         else:
-            # Pesan jika merek yang dicari tidak ditemukan
-            st.warning(f"Tidak ada review yang ditemukan untuk merek yang mengandung kata '{search_query}'. Coba kata kunci lain.")
+            st.metric(label="Prediksi Sentimen", value="Negatif 👎")
+            st.error(f"Skor Kepercayaan: {prediction_proba[0][0]:.2%}")
+            
     else:
-        # Pesan awal sebelum pengguna mencari
-        st.info("Silakan masukkan nama merek di kotak pencarian di atas untuk memulai analisis.")
-else:
-    st.warning("Aplikasi tidak dapat berjalan karena data tidak berhasil dimuat.")
+        st.warning("Model tidak berhasil dimuat atau tidak ada input teks.")
